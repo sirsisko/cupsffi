@@ -73,6 +73,32 @@ class CupsPrinter
     hash
   end
 
+  # Returns array with jobinformations from the given printer (@name).
+  def jobs
+    p = FFI::MemoryPointer.new :pointer
+    ary = []
+    dest_count = CupsFFI::cupsGetJobs2(@connection, p,@name,0,0)
+    dest_count.times do |i|
+      dest = CupsFFI::CupsJobS.new(p.get_pointer(0)+ (CupsFFI::CupsJobS.size*i))
+      job  = Hash.new
+      job[:completed_time] = Time.at(dest[:completed_time])
+      job[:creation_time] = Time.at(dest[:creation_time])
+      job[:dest] = dest[:dest]
+      job[:format] = dest[:format]
+      job[:id] = dest[:id]
+      job[:priority] = dest[:priority]
+      job[:t_precessing_time] = Time.at(dest[:processing_time])
+      job[:size] = dest[:size]
+      job[:state] = dest[:state]
+      job[:title] = dest[:title]
+      job[:user] = dest[:user]
+      ary << job
+    end
+    CupsFFI::cupsFreeJobs(dest_count, p.get_pointer(0))
+    return ary
+  end
+
+
   def state
     o = attributes
 
