@@ -38,6 +38,10 @@ Nothing required.  libcups is used to find and read all configuration.
     # :state is :idle, :printing, or :stopped.  For example:
     # {:state=>:idle, :reasons=>["none"]}
     printer.state
+    
+    # Return a array with informations about the active Jobs of this printer
+    printer.jobs
+    
 
     # Print a file (pdf, jpg, ps, etc.).  You can pass in a hash of printer
     # options if you want to override the printer's defaults.  A CupsJob object
