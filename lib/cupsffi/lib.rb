@@ -177,6 +177,8 @@ module CupsFFI
   attach_function 'cupsGetDests', [ :pointer ], :int
 
   attach_function 'cupsGetDests2', [ :pointer, :pointer ], :int
+  
+  attach_function 'cupsGetJobs2', [ :pointer, :pointer,:pointer,:int,:int ], :int
 
   # :int is the number of CupsDestS structs to free
   # :pointer is the first one
