@@ -20,6 +20,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
+require 'date'
+
 class CupsPrinter
   attr_reader :name, :connection
 
@@ -37,39 +39,69 @@ class CupsPrinter
     end
   end
 
+  def self.walk_attributes(connection)
+    p = FFI::MemoryPointer.new :pointer
+    dest_count = CupsFFI::cupsGetDests2(connection, p)
+    dest_count.times do |i|
+      dest = CupsFFI::CupsDestS.new(p.get_pointer(0) + (CupsFFI::CupsDestS.size * i))
+      yield dest
+    end
+    CupsFFI::cupsFreeDests(dest_count, p.get_pointer(0))
+  end
+
+  def self.walk_sub_attributes(dest)
+    dest[:num_options].times do |j|
+      options = CupsFFI::CupsOptionS.new(dest[:options] + (CupsFFI::CupsOptionS.size * j))
+      yield options
+    end
+  end
+
+  def self.release_connection(connection)
+    CupsFFI::httpClose(connection)
+  end
+
   def initialize(name, args = {})
     raise "Printer not found" unless CupsPrinter.get_all_printer_names(args).include? name
     @name = name
     @connection = CupsPrinter.get_connection(args)
   end
 
+  def close
+    CupsPrinter.release_connection(@connection)
+  end
+
   def self.get_all_printer_names(args = {})
     connection = get_connection(args)
-
-    p = FFI::MemoryPointer.new :pointer
-    dest_count = CupsFFI::cupsGetDests2(connection, p)
     ary = []
-    dest_count.times do |i|
-      d = CupsFFI::CupsDestS.new(p.get_pointer(0) + (CupsFFI::CupsDestS.size * i))
-      ary.push(d[:name].dup)
+    walk_attributes(connection) do |dest|
+      ary.push(dest[:name].dup)
     end
-    CupsFFI::cupsFreeDests(dest_count, p.get_pointer(0))
+    release_connection(connection)
     ary
   end
 
-  def attributes
-    p = FFI::MemoryPointer.new :pointer
-    dest_count = CupsFFI::cupsGetDests2(@connection, p)
+  def self.get_all_printer_attrs(args = {})
+    connection = get_connection(args)
     hash = {}
-    dest_count.times do |i|
-      dest = CupsFFI::CupsDestS.new(p.get_pointer(0) + (CupsFFI::CupsDestS.size * i))
+    walk_attributes(connection) do |dest|
+      pname = dest[:name].dup
+      hash[pname] ||= {}
+      walk_sub_attributes(dest) do |options|
+        hash[pname][options[:name].dup] = options[:value].dup
+      end
+    end
+    release_connection(connection)
+    hash
+  end
+
+  def attributes
+    hash = {}
+    CupsPrinter.walk_attributes(@connection) do |dest|
       next unless dest[:name] == @name
-      dest[:num_options].times do |j|
-        options = CupsFFI::CupsOptionS.new(dest[:options] + (CupsFFI::CupsOptionS.size * j))
+      CupsPrinter.walk_sub_attributes(dest) do |options|
         hash[options[:name].dup] = options[:value].dup
       end
     end
-    CupsFFI::cupsFreeDests(dest_count, p.get_pointer(0))
     hash
   end
 
@@ -180,6 +212,33 @@ class CupsPrinter
     raise CupsFFI::cupsLastErrorString() if r == 0
   end
 
+  def get_all_jobs(which = CupsFFI::CUPS_WHICHJOBS_ACTIVE)
+    pointer = FFI::MemoryPointer.new :pointer
+    job_count = CupsFFI::cupsGetJobs(pointer, @name, 0, which)
+
+    jobs = []
+    job_count.times do |i|
+      job = CupsFFI::CupsJobS.new(pointer.get_pointer(0) + (CupsFFI::CupsJobS.size * i))
+
+      jobs << {
+        :completed_time => job[:completed_time].nil? ? nil : DateTime.strptime(job[:completed_time].to_s, "%s"),
+        :creation_time => job[:creation_time].nil? ? nil : DateTime.strptime(job[:creation_time].to_s, "%s"),
+        :processing_time => job[:processing_time].nil? ? nil : DateTime.strptime(job[:processing_time].to_s, "%s"),
+        :dest => job[:dest].nil? ? nil : job[:dest].dup,
+        :format => job[:format].nil? ? nil : job[:format].dup,
+        :id => job[:id],
+        :priority => job[:priority],
+        :size => job[:size],
+        :title => job[:title].nil? ? nil : job[:title].dup,
+        :user => job[:user].nil? ? nil : job[:user].dup,
+        :state => job[:state].nil? ? nil : job[:state]
+      }
+    end
+
+    CupsFFI::cupsFreeJobs(job_count, pointer.get_pointer(0))
+    jobs
+  end
+
 
   private
   def validate_options(options)
@@ -194,14 +253,15 @@ class CupsPrinter
     # Examine each input option to make sure that both the key and value are
     # found in the ppd options.
     options.each do |key,value|
+      key_string = key.to_s
       # Accept common CUPS options
-      next if ['copies'].include?(key)
+      next if ['copies', 'landscape'].include?(key_string)
 
-      raise "Invalid option #{key} for printer #{@name}" if ppd_options[key].nil?
-      choices = ppd_options[key][:choices].map{|c| c[:choice]}
+      raise "Invalid option #{key} for printer #{@name}" if ppd_options[key_string].nil?
+      choices = ppd_options[key_string][:choices].map{|c| c[:choice]}
       # Treat 'Custom.WIDTHxHEIGHT' as just 'Custom'
-      base_value = (value =~ /^Custom\./ && %w{PageRegion PageSize}.include?(key)) ? 'Custom' : value
-      raise "Invalid value #{value} for option #{key}" unless choices.include?(base_value)
+      base_value = (value =~ /^Custom\./ && %w{PageRegion PageSize}.include?(key_string)) ? 'Custom' : value
+      raise "Invalid value #{value} for option #{key_string}" unless choices.include?(base_value)
     end
   end
 end
